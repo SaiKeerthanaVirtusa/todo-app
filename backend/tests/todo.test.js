@@ -1,34 +1,68 @@
 const { test, describe, before, after, beforeEach } = require("node:test");
 const assert = require("node:assert/strict");
 const http = require("http");
-const app = require("../src/app");
-const todoModel = require("../src/models/todoModel");
+const { randomUUID } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
 
-describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
+const databaseUrl = process.env.TEST_DATABASE_URL;
+const schema = `test_${randomUUID().replaceAll("-", "")}`;
+if (databaseUrl) {
+  process.env.NODE_ENV = "test";
+  const connection = new URL(databaseUrl);
+  connection.searchParams.set("options", `-c search_path=${schema}`);
+  process.env.DATABASE_URL = connection.toString();
+}
+
+describe("VIT Team 3 - To-Do Backend API Test Suite", {
+  skip: databaseUrl ? false : "Set TEST_DATABASE_URL to run the PostgreSQL integration suite.",
+}, () => {
+  const app = require("../src/app");
+  const db = require("../src/config/db");
+  const todoModel = require("../src/models/todoModel");
   let server;
   let baseUrl;
+  let cookie;
+  let userId;
 
   before(async () => {
-    process.env.NODE_ENV = "test";
-    // Listen on random available port
+    await db.query(`CREATE SCHEMA ${schema}`);
+    await db.query(readFileSync(join(__dirname, "../db/schema.sql"), "utf8"));
     server = http.createServer(app);
-    await new Promise((resolve) => server.listen(0, resolve));
-    const port = server.address().port;
-    baseUrl = `http://127.0.0.1:${port}`;
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const signup = await apiRequest("/api/auth/signup", {
+      method: "POST",
+      body: { name: "Task owner", email: "owner@example.com", password: "test-password" },
+    });
+    assert.equal(signup.status, 201);
+    cookie = signup.cookie;
+    userId = signup.data.data.id;
   });
 
   after(async () => {
-    await new Promise((resolve) => server.close(resolve));
+    if (server) await new Promise((resolve) => server.close(resolve));
+    try {
+      await db.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    } finally {
+      await db.end();
+    }
   });
 
-  beforeEach(() => {
-    // Reset seed data between tests
-    todoModel.reset();
+  beforeEach(async () => {
+    await db.query("DELETE FROM todos WHERE user_id = $1", [userId]);
+    await db.query(
+      `INSERT INTO todos (id, user_id, title, priority, completed) VALUES
+       ('1', $1, 'Complete Virtusa Backend API', 'High', false),
+       ('2', $1, 'Verify Frontend Integration', 'Medium', false),
+       ('3', $1, 'Initial Team Setup', 'Low', true)`,
+      [userId]
+    );
   });
 
   // Helper function to make JSON HTTP requests
   async function apiRequest(endpoint, { method = "GET", body = null, headers = {} } = {}) {
-    const reqHeaders = { "Content-Type": "application/json", ...headers };
+    const reqHeaders = { "Content-Type": "application/json", ...(cookie && { Cookie: cookie }), ...headers };
     const options = {
       method,
       headers: reqHeaders,
@@ -43,7 +77,7 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
     } catch {
       data = null;
     }
-    return { status: response.status, data };
+    return { status: response.status, data, cookie: response.headers.get("set-cookie")?.split(";")[0] };
   }
 
   // ============================================
@@ -159,6 +193,7 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
       title: "Write End-to-End API Documentation",
       description: "Document all endpoints, sample payloads, and curl commands",
       priority: "High",
+      category: "Work",
       dueDate: "2026-11-25",
       completed: false,
     };
@@ -173,6 +208,8 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
     assert.ok(data.data.id);
     assert.strictEqual(data.data.title, newTask.title);
     assert.strictEqual(data.data.priority, "High");
+    assert.strictEqual(data.data.category, "Work");
+    assert.strictEqual(data.data.dueDate, newTask.dueDate);
     assert.strictEqual(data.data.completed, false);
     assert.ok(data.data.createdAt);
   });
@@ -268,7 +305,7 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
   // PATCH /api/todos/:id/status (Toggle & Set Status)
   // ============================================
   test("PATCH /api/todos/:id/status - toggles status when body is empty", async () => {
-    const initial = await todoModel.findById("1");
+    const initial = await todoModel.findById(userId, "1");
     const wasCompleted = initial.completed;
 
     const { status, data } = await apiRequest("/api/todos/1/status", {
@@ -279,6 +316,7 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
     assert.strictEqual(status, 200);
     assert.strictEqual(data.success, true);
     assert.strictEqual(data.data.completed, !wasCompleted);
+    assert.ok(data.data.completedAt);
   });
 
   test("PATCH /api/todos/:id/status - sets completed status explicitly", async () => {
@@ -337,6 +375,48 @@ describe("VIT Team 3 - To-Do Backend API Test Suite", () => {
 
     assert.strictEqual(status, 404);
     assert.strictEqual(data.success, false);
+  });
+
+  test("accounts authenticate, and sessions cannot access another account's tasks", async () => {
+    const anonymous = await apiRequest("/api/todos", { headers: { Cookie: "" } });
+    assert.equal(anonymous.status, 401);
+
+    const credentials = { name: "Other user", email: "other@example.com", password: "another-password" };
+    const signup = await apiRequest("/api/auth/signup", { method: "POST", body: credentials });
+    assert.equal(signup.status, 201);
+    const invalid = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: { ...credentials, password: "wrong-password" },
+    });
+    assert.equal(invalid.status, 401);
+
+    const login = await apiRequest("/api/auth/login", {
+      method: "POST",
+      body: { ...credentials, email: credentials.email.toUpperCase() },
+      headers: { Cookie: signup.cookie },
+    });
+    assert.equal(login.status, 200);
+    assert.equal(login.data.data.email, credentials.email);
+    assert.equal(login.data.data.password_hash, undefined);
+    const headers = { Cookie: login.cookie };
+
+    const list = await apiRequest("/api/todos", { headers });
+    assert.deepEqual(list.data.data, []);
+    const summary = await apiRequest("/api/todos/summary", { headers });
+    assert.deepEqual(summary.data.data, { completed: 0, pending: 0, total: 0 });
+
+    for (const method of ["GET", "PUT", "PATCH", "DELETE"]) {
+      const body = ["PUT", "PATCH"].includes(method) ? { title: "Replacement title" } : null;
+      const result = await apiRequest("/api/todos/1", { method, headers, body });
+      assert.equal(result.status, 404);
+    }
+    const toggle = await apiRequest("/api/todos/1/status", { method: "PATCH", headers, body: {} });
+    assert.equal(toggle.status, 404);
+
+    const logout = await apiRequest("/api/auth/logout", { method: "POST", headers, body: {} });
+    assert.equal(logout.status, 200);
+    const session = await apiRequest("/api/auth/session", { headers });
+    assert.equal(session.status, 401);
   });
 
   // ============================================

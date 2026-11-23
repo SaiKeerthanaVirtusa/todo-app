@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { apiRequest } from "@/lib/api";
 
 const CATEGORIES = ["Work", "Personal", "Study", "Other"];
 const FILTERS = ["All tasks", "Today", "Upcoming", "Completed", "Overdue"];
@@ -15,57 +16,15 @@ function todayKey() {
   return dateKey(new Date());
 }
 
-// Backend API URL
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000/api/todos";
-
-// Reusable API request function
-async function apiRequest(path = "", options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-  });
-
-  const body = await response.json().catch(() => ({}));
-
-  if (!response.ok || body.success === false) {
-    const message =
-      body.message ||
-      (Array.isArray(body.errors) ? body.errors.join(" ") : "") ||
-      `Request failed (${response.status})`;
-
-    throw new Error(message);
-  }
-
-  return body;
-}
-
-// Temporary Local Storage for frontend-only metadata
-// (category and completedAt, since backend doesn't store them yet)
-function readTaskMetadata() {
-  try {
-    return JSON.parse(
-      localStorage.getItem("taskly-task-metadata") || "{}"
-    );
-  } catch {
-    return {};
-  }
-}
-
-function saveTaskMetadata(metadata) {
-  localStorage.setItem(
-    "taskly-task-metadata",
-    JSON.stringify(metadata)
-  );
+function taskRequest(path = "", options) {
+  return apiRequest(`/todos${path}`, options);
 }
 
 export default function Home() {
   const router = useRouter();
 
-  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [signingOut, setSigningOut] = useState(false);
   const [tasks, setTasks] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [apiError, setApiError] = useState("");
@@ -91,75 +50,49 @@ export default function Home() {
     category: "Personal",
   });
 
-  // Authenticate and fetch tasks from backend
   useEffect(() => {
-    const session = localStorage.getItem("taskly-session");
-
-    if (!session) {
-      router.replace("/login");
-      return;
-    }
-
-    setAuthReady(true);
-
-    const savedTheme = localStorage.getItem("taskly-theme");
-
-    if (savedTheme) {
-      setTheme(savedTheme);
-    }
-
     let cancelled = false;
 
-    async function loadTasks() {
+    async function loadWorkspace() {
       try {
-        const response = await apiRequest();
+        const session = await apiRequest("/auth/session");
+        if (cancelled) return;
 
-        const metadata = readTaskMetadata();
-        const apiTasks = Array.isArray(response.data)
-          ? response.data
-          : [];
+        setTheme(localStorage.getItem("taskly-theme") || "light");
+        setUser(session.data);
 
-        if (!cancelled) {
-          setTasks(
-            apiTasks.map((task) => ({
-              ...task,
-              category:
-                metadata[task.id]?.category ||
-                task.category ||
-                "Personal",
-              completedAt:
-                metadata[task.id]?.completedAt || "",
-            }))
-          );
-
-          setApiError("");
-        }
+        const response = await taskRequest();
+        if (!cancelled) setTasks(response.data);
       } catch (error) {
-        if (!cancelled) {
-          setApiError(
-            `Could not load tasks from the backend: ${error.message}`
-          );
+        if (cancelled) return;
+        if (error.status === 401) {
+          setUser(null);
+          router.replace("/login");
+        } else {
+          setApiError(`Could not load workspace: ${error.message}`);
         }
       } finally {
-        if (!cancelled) {
-          setLoaded(true);
-        }
+        if (!cancelled) setLoaded(true);
       }
     }
 
-    loadTasks();
+    loadWorkspace();
+    return () => { cancelled = true; };
+  }, [router]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Save theme preference
   useEffect(() => {
-    if (authReady) {
-      localStorage.setItem("taskly-theme", theme);
+    if (user) localStorage.setItem("taskly-theme", theme);
+  }, [theme, user]);
+
+  function handleTaskError(message, error) {
+    if (error.status === 401) {
+      setUser(null);
+      setTasks([]);
+      router.replace("/login");
+    } else {
+      setApiError(`${message}: ${error.message}`);
     }
-  }, [theme, authReady]);
+  }
 
   // Dashboard calculations
   const today = todayKey();
@@ -289,72 +222,26 @@ export default function Home() {
       description: form.description,
       priority: form.priority,
       dueDate: form.dueDate || "",
+      category: form.category,
     };
 
     try {
       if (editingId !== null) {
-        // Update existing task
-        const response = await apiRequest(
-          `/${encodeURIComponent(editingId)}`,
-          {
-            method: "PUT",
-            body: JSON.stringify(payload),
-          }
-        );
-
-        const updated = response.data;
-
-        const metadata = readTaskMetadata();
-
-        metadata[updated.id] = {
-          ...(metadata[updated.id] || {}),
-          category: form.category,
-        };
-
-        saveTaskMetadata(metadata);
-
-        setTasks((old) =>
-          old.map((task) =>
-            task.id === editingId
-              ? {
-                  ...task,
-                  ...updated,
-                  category: form.category,
-                }
-              : task
-          )
-        );
+        const { data: updated } = await taskRequest(`/${encodeURIComponent(editingId)}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setTasks((old) => old.map((task) => task.id === editingId ? updated : task));
       } else {
-        // Create new task
-        const response = await apiRequest("", {
+        const { data: created } = await taskRequest("", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-
-        const created = response.data;
-
-        const metadata = readTaskMetadata();
-
-        metadata[created.id] = {
-          category: form.category,
-          completedAt: "",
-        };
-
-        saveTaskMetadata(metadata);
-
-        setTasks((old) => [
-          {
-            ...created,
-            category: form.category,
-            completedAt: "",
-          },
-          ...old,
-        ]);
+        setTasks((old) => [created, ...old]);
       }
-
       resetForm();
     } catch (error) {
-      setApiError(`Could not save task: ${error.message}`);
+      handleTaskError("Could not save task", error);
     }
   }
 
@@ -388,17 +275,13 @@ export default function Home() {
     setApiError("");
 
     try {
-      await apiRequest(`/${encodeURIComponent(id)}`, {
+      await taskRequest(`/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
 
       setTasks((old) => old.filter((task) => task.id !== id));
-
-      const metadata = readTaskMetadata();
-      delete metadata[id];
-      saveTaskMetadata(metadata);
     } catch (error) {
-      setApiError(`Could not delete task: ${error.message}`);
+      handleTaskError("Could not delete task", error);
     }
   }
 
@@ -413,45 +296,13 @@ export default function Home() {
     setApiError("");
 
     try {
-      const response = await apiRequest(
-        `/${encodeURIComponent(id)}/status`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            completed: nextCompleted,
-          }),
-        }
-      );
-
-      const updated = response.data;
-      const completedAt = nextCompleted ? today : "";
-
-      const metadata = readTaskMetadata();
-
-      metadata[id] = {
-        ...(metadata[id] || {}),
-        category: task.category || "Personal",
-        completedAt,
-      };
-
-      saveTaskMetadata(metadata);
-
-      setTasks((old) =>
-        old.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                ...updated,
-                category: task.category || "Personal",
-                completedAt,
-              }
-            : item
-        )
-      );
+      const { data: updated } = await taskRequest(`/${encodeURIComponent(id)}/status`, {
+        method: "PATCH",
+        body: JSON.stringify({ completed: nextCompleted }),
+      });
+      setTasks((old) => old.map((item) => item.id === id ? updated : item));
     } catch (error) {
-      setApiError(
-        `Could not update task status: ${error.message}`
-      );
+      handleTaskError("Could not update task status", error);
     }
   }
 
@@ -504,7 +355,7 @@ export default function Home() {
       count: tasks.filter(
         (t) =>
           t.completed &&
-          (t.completedAt || t.createdAt) === key
+          dateKey(t.completedAt || t.createdAt) === key
       ).length,
     };
   });
@@ -512,17 +363,25 @@ export default function Home() {
   const maxWeek = Math.max(1, ...weekStats.map((x) => x.count));
 
   // Logout
-  function logout() {
-    localStorage.removeItem("taskly-session");
-    router.replace("/login");
+  async function logout() {
+    setSigningOut(true);
+    try {
+      await apiRequest("/auth/logout", { method: "POST", body: "{}" });
+      setUser(null);
+      setTasks([]);
+      router.replace("/login");
+    } catch (error) {
+      setApiError(`Could not log out: ${error.message}`);
+      setSigningOut(false);
+    }
   }
 
   // Authentication loading screen
-  if (!authReady) {
+  if (!user) {
     return (
       <main className="auth-loading">
         <div className="loading-mark">✓</div>
-        <p>Opening your workspace...</p>
+        <p role={apiError ? "alert" : undefined}>{apiError || "Opening your workspace..."}</p>
       </main>
     );
   }
@@ -602,11 +461,11 @@ export default function Home() {
           </div>
 
           <div className="profile">
-            <span className="avatar">T</span>
+            <span className="avatar">{user.name[0].toUpperCase()}</span>
 
             <div>
-              <b>My workspace</b>
-              <small>Personal account</small>
+              <b>{user.name}</b>
+              <small>{user.email}</small>
             </div>
           </div>
         </div>
@@ -640,9 +499,9 @@ export default function Home() {
               </span>
             </button>
 
-            <span className="avatar">T</span>
+            <span className="avatar">{user.name[0].toUpperCase()}</span>
 
-            <button className="logout-button" onClick={logout}>
+            <button className="logout-button" onClick={logout} disabled={signingOut}>
               Log out ↗
             </button>
           </div>

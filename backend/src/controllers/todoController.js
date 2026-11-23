@@ -13,7 +13,7 @@ class TodoController {
       const { search, filter, status, priority, sortBy, order } = req.query;
       const effectiveStatus = status || filter;
 
-      const todos = await todoModel.findAll({
+      const todos = await todoModel.findAll(req.user.id, {
         search,
         status: effectiveStatus,
         priority,
@@ -37,7 +37,7 @@ class TodoController {
    */
   async getSummary(req, res, next) {
     try {
-      const summary = await todoModel.getSummary();
+      const summary = await todoModel.getSummary(req.user.id);
       return res.status(200).json({
         success: true,
         data: summary,
@@ -54,7 +54,7 @@ class TodoController {
   async getTodoById(req, res, next) {
     try {
       const { id } = req.params;
-      const todo = await todoModel.findById(id);
+      const todo = await todoModel.findById(req.user.id, id);
 
       if (!todo) {
         return res.status(404).json({
@@ -78,14 +78,15 @@ class TodoController {
    */
   async createTodo(req, res, next) {
     try {
-      const { title, description, priority, dueDate, completed } = req.body;
+      const { title, description, priority, dueDate, completed, category } = req.body;
 
-      const newTask = await todoModel.create({
+      const newTask = await todoModel.create(req.user.id, {
         title,
         description,
         priority,
         dueDate,
         completed,
+        category,
       });
 
       return res.status(201).json({
@@ -105,7 +106,7 @@ class TodoController {
   async updateTodo(req, res, next) {
     try {
       const { id } = req.params;
-      const updatedTask = await todoModel.update(id, req.body);
+      const updatedTask = await todoModel.update(req.user.id, id, req.body);
 
       if (!updatedTask) {
         return res.status(404).json({
@@ -131,30 +132,20 @@ class TodoController {
   async updateStatus(req, res, next) {
     try {
       const { id } = req.params;
-      const existing = await todoModel.findById(id);
+      const { completed, status } = req.body;
+      const newStatus = status === undefined ? completed : completed ?? (status.toLowerCase() === "completed");
+      const updatedTask = await todoModel.updateStatus(req.user.id, id, newStatus);
 
-      if (!existing) {
+      if (!updatedTask) {
         return res.status(404).json({
           success: false,
           message: `Task with ID '${id}' was not found.`,
         });
       }
 
-      let newStatus;
-      if (req.body.completed !== undefined) {
-        newStatus = Boolean(req.body.completed);
-      } else if (req.body.status !== undefined) {
-        newStatus = req.body.status.toLowerCase() === "completed";
-      } else {
-        // Toggle if no explicit status is passed
-        newStatus = !existing.completed;
-      }
-
-      const updatedTask = await todoModel.updateStatus(id, newStatus);
-
       return res.status(200).json({
         success: true,
-        message: `Task marked as ${newStatus ? "Completed" : "Pending"}.`,
+        message: `Task marked as ${updatedTask.completed ? "Completed" : "Pending"}.`,
         data: updatedTask,
       });
     } catch (err) {
@@ -169,7 +160,7 @@ class TodoController {
   async deleteTodo(req, res, next) {
     try {
       const { id } = req.params;
-      const deletedTask = await todoModel.delete(id);
+      const deletedTask = await todoModel.delete(req.user.id, id);
 
       if (!deletedTask) {
         return res.status(404).json({

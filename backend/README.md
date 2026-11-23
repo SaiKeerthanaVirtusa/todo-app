@@ -11,136 +11,47 @@ Robust, modular RESTful API built with **Node.js** and **Express.js** for the VI
 
 ---
 
-## Architecture & Directory Structure
+## Run locally
 
-```
-backend/
-├── .env.example              # Environment variables template
-├── .gitignore                # Excludes node_modules, local logs, and secrets
-├── package.json              # Backend dependencies and execution scripts
-├── README.md                 # Complete API documentation and integration guide
-├── src/
-│   ├── app.js                # Express application configuration, CORS, middleware
-│   ├── server.js             # HTTP server listener and graceful shutdown handling
-│   ├── config/
-│   │   └── env.js            # Environment configuration with safe defaults
-│   ├── controllers/
-│   │   └── todoController.js # Business logic for CRUD operations & metrics
-│   ├── middleware/
-│   │   ├── errorHandler.js   # Centralized error handler (prevents info leakage)
-│   │   ├── notFoundHandler.js# 404 handler for unrecognized routes
-│   │   └── validate.js       # Higher-order request validation middleware
-│   ├── models/
-│   │   └── todoModel.js      # Task data store, seed data, filtering, and metrics
-│   ├── routes/
-│   │   └── todoRoutes.js     # REST API route declarations and validator bindings
-│   └── validators/
-│       └── todoValidator.js  # Field validation (title, priority, date, status, ID)
-└── tests/
-    └── todo.test.js          # Automated end-to-end endpoint test suite
-```
+1. Start PostgreSQL and create a dedicated database. For an existing local server and role, run `createdb taskly`.
+2. From the project root, set up and start Express.
 
----
+   ```bash
+   cd backend
+   npm ci
+   cp .env.example .env
+   # Edit DATABASE_URL in .env to match your PostgreSQL connection.
+   npm run db:migrate
+   npm run dev
+   ```
 
-## Features
+3. In a second terminal, start Next.js from the project root.
 
-- **RESTful Architecture:** Follows standard HTTP verbs (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`) and proper HTTP status codes (`200`, `201`, `400`, `404`, `500`).
-- **Full CRUD Operations:** Create, retrieve all, retrieve single, update, toggle/change status, and delete tasks.
-- **Advanced Query Support:** Built-in search (by title/description), filtering by status (`pending`, `completed`), filtering by priority (`Low`, `Medium`, `High`), and customizable sorting.
-- **Dashboard Summary Endpoint:** Dedicated `/api/todos/summary` providing real-time counts for `total`, `pending`, and `completed` tasks.
-- **Strict Request Validation:** Checks for required fields, empty or whitespace-only titles, valid priority enums, date format (`YYYY-MM-DD`), and parameter formatting.
-- **Centralized Error Handling:** Safely returns structured JSON errors while suppressing internal stack traces in production.
-- **CORS Configured:** Pre-configured for Next.js frontend development origins (`http://localhost:3000`).
-- **Zero-Friction In-Memory Model:** Pre-seeded with initial tasks so evaluators can test immediately without setting up external database servers.
-- **Comprehensive Automated Tests:** 23 automated tests covering health checks, positive and negative CRUD flows, validation rejections, and malformed JSON payloads.
+   ```bash
+   npm ci
+   npm run dev
+   ```
 
----
+4. Open http://localhost:3000/login and choose **Create an account**. The previous demo login did not register accounts. Each new account starts with an empty workspace.
 
-## Installation & Setup
+Next.js forwards authentication and task requests to Express on port 5500. If Express runs elsewhere, set `API_BACKEND_URL` in the project-root `.env.local` before starting or building Next.js. If you change `PORT` in `backend/.env`, set `API_BACKEND_URL` to the matching address. Keep the browser on the Next.js origin. Production sessions use secure cookies. For a local HTTP production build, set `COOKIE_SECURE=false` in the backend environment.
 
-### Prerequisites
+## API
 
-- **Node.js:** v18.0.0 or later (v20+ recommended)
-- **npm:** v9.0.0 or later
+| Method | Route | Purpose |
+| --- | --- | --- |
+| POST | `/api/auth/signup` | Create an account with `name`, `email`, and `password`, then sign in |
+| POST | `/api/auth/login` | Sign in with `email` and `password` |
+| GET | `/api/auth/session` | Read the signed-in account |
+| POST | `/api/auth/logout` | End the current session |
+| GET, POST | `/api/todos` | List or create tasks |
+| GET | `/api/todos/summary` | Read task counts |
+| GET, PUT, PATCH, DELETE | `/api/todos/:id` | Read, update, or delete a task |
+| PATCH | `/api/todos/:id/status` | Set or toggle completion |
 
-### 1. Install Dependencies
+Send JSON for signup, login, logout, and task writes. Account emails are case-insensitive. Passwords are salted and hashed with scrypt. Signup and login return an HTTP-only session cookie. All task routes derive ownership from that session. The database stores categories and completion timestamps with each task.
 
-Navigate into the `backend/` directory and install the required npm packages:
-
-```bash
-cd backend
-npm install
-```
-
-### 2. Environment Configuration
-
-Copy the example environment file:
-
-```bash
-cp .env.example .env
-```
-
-Default `.env` configuration:
-
-```env
-PORT=5000
-NODE_ENV=development
-CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:3000
-```
-
-### 3. Start the Backend
-
-**Development mode (with auto-reload using Node 18+ watch mode):**
-```bash
-npm run dev
-```
-
-**Production / standard mode:**
-```bash
-npm start
-```
-
-The server will start at: `http://localhost:5000`
-
----
-
-## Running Automated Tests
-
-The backend includes a comprehensive test suite using Node.js's built-in test runner (`node:test` and `node:assert/strict`):
-
-```bash
-npm test
-```
-
-All 23 test suites verify:
-- Health and status endpoints
-- Task creation with valid & invalid inputs
-- Retrieve all tasks, pagination/filtering/search queries
-- Single task retrieval and 404 handling
-- Full updates and partial status toggles
-- Deletion and cascading 404 verification
-- Error handling for malformed JSON
-
----
-
-## API Endpoints Reference
-
-Base URL: `http://localhost:5000`
-
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/` | API status and metadata |
-| `GET` | `/api/health` | Health check endpoint |
-| `GET` | `/api/todos` | Retrieve tasks (supports `search`, `status`, `priority`, `sortBy`, `order`) |
-| `GET` | `/api/todos/summary` | Retrieve summary statistics (`total`, `pending`, `completed`) |
-| `GET` | `/api/todos/:id` | Retrieve an individual task by ID |
-| `POST` | `/api/todos` | Create a new task |
-| `PUT` | `/api/todos/:id` | Update an existing task |
-| `PATCH` | `/api/todos/:id/status` | Update task completion status (or toggle if body empty) |
-| `PATCH` | `/api/todos/:id` | Partial update of task attributes |
-| `DELETE` | `/api/todos/:id` | Delete a task |
-
----
+The task list accepts `search`, `status` (or `filter`), `priority`, `sortBy`, and `order`. The status endpoint accepts `completed` (a Boolean), `status` (`Completed` or `Pending`), or an empty JSON object to toggle.
 
 ## Request & Response Samples
 
@@ -153,7 +64,7 @@ Base URL: `http://localhost:5000`
   "count": 1,
   "data": [
     {
-      "id": "1",
+      "id": "a1b2c3d4-e5f6-47a8-9012-abcdef123456",
       "title": "Complete Virtusa Backend API",
       "description": "Implement modular Express.js REST API with full CRUD operations and validation.",
       "priority": "High",
@@ -225,7 +136,7 @@ Base URL: `http://localhost:5000`
   "success": true,
   "message": "Task marked as Completed.",
   "data": {
-    "id": "1",
+    "id": "a1b2c3d4-e5f6-47a8-9012-abcdef123456",
     "title": "Complete Virtusa Backend API",
     "completed": true,
     "updatedAt": "2026-11-16T16:52:00.000Z"
@@ -260,56 +171,10 @@ Base URL: `http://localhost:5000`
 
 ---
 
-## Example cURL Commands
+## Tests
+
+From `backend`, point the suite at a PostgreSQL test database. The test role needs permission to create schemas. The suite applies the migration in a temporary schema and removes that schema afterward.
 
 ```bash
-# Health Check
-curl -X GET http://localhost:5000/api/health
-
-# Get All Tasks
-curl -X GET http://localhost:5000/api/todos
-
-# Filter Pending High Priority Tasks
-curl -X GET "http://localhost:5000/api/todos?status=pending&priority=high"
-
-# Get Task Metrics
-curl -X GET http://localhost:5000/api/todos/summary
-
-# Create a Task
-curl -X POST http://localhost:5000/api/todos \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Test Virtusa Endpoint","description":"Testing via curl","priority":"Medium","dueDate":"2026-11-30"}'
-
-# Update a Task
-curl -X PUT http://localhost:5000/api/todos/1 \
-  -H "Content-Type: application/json" \
-  -d '{"title":"Updated Task Title","priority":"Low"}'
-
-# Toggle Status
-curl -X PATCH http://localhost:5000/api/todos/1/status \
-  -H "Content-Type: application/json" \
-  -d '{"completed":true}'
-
-# Delete a Task
-curl -X DELETE http://localhost:5000/api/todos/1
+TEST_DATABASE_URL=postgresql://localhost/taskly_test npm test
 ```
-
----
-
-## Frontend Integration Guide
-
-The Next.js frontend can connect to this backend by creating an API client service or setting `NEXT_PUBLIC_API_URL=http://localhost:5000/api`.
-
-### Connecting Next.js:
-
-1. In the frontend root, configure `.env.local`:
-   ```env
-   NEXT_PUBLIC_API_URL=http://localhost:5000/api
-   ```
-
-2. Replace direct `localStorage` calls in `app/page.js` with API calls:
-   - Initial load: `fetch(`${API_URL}/todos`).then(res => res.json())`
-   - Add task: `fetch(`${API_URL}/todos`, { method: "POST", body: JSON.stringify(newTask) })`
-   - Update task: `fetch(`${API_URL}/todos/${id}`, { method: "PUT", body: JSON.stringify(updatedTask) })`
-   - Toggle status: `fetch(`${API_URL}/todos/${id}/status`, { method: "PATCH", body: JSON.stringify({ completed: !task.completed }) })`
-   - Delete task: `fetch(`${API_URL}/todos/${id}`, { method: "DELETE" })`

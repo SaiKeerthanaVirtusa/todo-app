@@ -2,6 +2,8 @@ const express = require("express");
 const cors = require("cors");
 const morgan = require("morgan");
 const config = require("./config/env");
+const authRoutes = require("./routes/authRoutes");
+const { requireSession } = require("./middleware/session");
 const todoRoutes = require("./routes/todoRoutes");
 const notFoundHandler = require("./middleware/notFoundHandler");
 const errorHandler = require("./middleware/errorHandler");
@@ -21,8 +23,7 @@ const corsOptions = {
     if (
       config.corsOrigin.includes("*") ||
       config.corsOrigin.includes(origin) ||
-      /^http:\/\/localhost:[0-9]+$/.test(origin) ||
-      /^http:\/\/127\.0\.0\.1:[0-9]+$/.test(origin)
+      (!config.isProduction && /^http:\/\/(localhost|127\.0\.0\.1):[0-9]+$/.test(origin))
     ) {
       return callback(null, true);
     }
@@ -70,7 +71,13 @@ app.get("/api/health", (req, res) => {
 });
 
 // To-Do Resource Routes
-app.use("/api/todos", todoRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/todos", requireSession, (req, res, next) => {
+  if (["POST", "PUT", "PATCH"].includes(req.method) && !req.is("application/json")) {
+    return res.status(415).json({ success: false, message: "Send an application/json body." });
+  }
+  next();
+}, todoRoutes);
 
 // ============================================
 // Error Handling

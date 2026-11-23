@@ -5,7 +5,7 @@ const path = require("path");
 dotenv.config({ path: path.resolve(__dirname, "../../.env") });
 
 const config = {
-  port: parseInt(process.env.PORT, 10) || 5000,
+  port: parseInt(process.env.PORT, 10) || 5500,
   nodeEnv: process.env.NODE_ENV || "development",
   corsOrigin: process.env.CORS_ORIGIN
     ? process.env.CORS_ORIGIN.split(",").map((origin) => origin.trim())

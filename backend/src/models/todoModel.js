@@ -1,80 +1,27 @@
-const crypto = require("crypto");
+const { randomUUID } = require("node:crypto");
+const db = require("../config/db");
+
+const taskColumns = `
+  id, title, description, priority, category, coalesce(due_date::text, '') AS "dueDate",
+  completed, completed_at AS "completedAt", created_at AS "createdAt", updated_at AS "updatedAt"
+`;
+
+function normalizePriority(priority) {
+  return priority[0].toUpperCase() + priority.slice(1).toLowerCase();
+}
+
+function normalizeDate(value) {
+  if (!value) return null;
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : new Date(value).toISOString().slice(0, 10);
+}
 
 class TodoModel {
-  constructor() {
-    this.todos = [];
-    this.seedInitialData();
-  }
-
-  /**
-   * Populate initial demo tasks for development & evaluation
-   */
-  seedInitialData() {
-    const today = new Date();
-    const futureDate = new Date(today);
-    futureDate.setDate(today.getDate() + 3);
-    const dueDateStr = futureDate.toISOString().split("T")[0];
-
-    this.todos = [
-      {
-        id: "1",
-        title: "Complete Virtusa Backend API",
-        description: "Implement modular Express.js REST API with full CRUD operations and validation.",
-        priority: "High",
-        dueDate: dueDateStr,
-        completed: false,
-        createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-        updatedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-      },
-      {
-        id: "2",
-        title: "Verify Frontend Integration",
-        description: "Connect Next.js task management components to backend endpoints.",
-        priority: "Medium",
-        dueDate: dueDateStr,
-        completed: false,
-        createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-        updatedAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-      },
-      {
-        id: "3",
-        title: "Initial Team Setup & Repository Structure",
-        description: "Setup project repo, Next.js frontend shell, and backend skeleton.",
-        priority: "Low",
-        dueDate: today.toISOString().split("T")[0],
-        completed: true,
-        createdAt: new Date(Date.now() - 3600000 * 48).toISOString(),
-        updatedAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-      },
-    ];
-  }
-
-  /**
-   * Reset store to initial seed data (useful for test isolation)
-   */
-  reset() {
-    this.seedInitialData();
-    return this.todos;
-  }
-
-  /**
-   * Clear all tasks
-   */
-  clear() {
-    this.todos = [];
-  }
-
-  /**
-   * Retrieve all tasks with optional search, filtering, and sorting
-   * @param {Object} options
-   * @param {string} [options.search] - Search text for title/description
-   * @param {string} [options.status] - 'all' | 'pending' | 'completed'
-   * @param {string} [options.priority] - 'all' | 'low' | 'medium' | 'high'
-   * @param {string} [options.sortBy] - 'createdAt' | 'dueDate' | 'priority' | 'title'
-   * @param {string} [options.order] - 'asc' | 'desc'
-   */
-  async findAll({ search, status, priority, sortBy = "createdAt", order = "desc" } = {}) {
-    let result = [...this.todos];
+  async findAll(userId, { search, status, priority, sortBy = "createdAt", order = "desc" } = {}) {
+    const { rows } = await db.query(
+      `SELECT ${taskColumns} FROM todos WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    let result = rows;
 
     // Search query filter (matches title or description)
     if (search && search.trim()) {
@@ -127,94 +74,76 @@ class TodoModel {
     return result;
   }
 
-  /**
-   * Retrieve a single task by ID
-   * @param {string|number} id
-   */
-  async findById(id) {
-    if (!id) return null;
-    const task = this.todos.find((t) => t.id.toString() === id.toString());
-    return task ? { ...task } : null;
+  async findById(userId, id) {
+    const { rows } = await db.query(
+      `SELECT ${taskColumns} FROM todos WHERE user_id = $1 AND id = $2`, [userId, id]
+    );
+    return rows[0];
   }
 
-  /**
-   * Create a new task
-   * @param {Object} taskData
-   */
-  async create({ title, description = "", priority = "Medium", dueDate = "", completed = false }) {
-    const now = new Date().toISOString();
-    const newTask = {
-      id: crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(),
-      title: title.trim(),
-      description: (description || "").trim(),
-      priority: priority.charAt(0).toUpperCase() + priority.slice(1).toLowerCase(),
-      dueDate: dueDate || "",
-      completed: Boolean(completed),
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    this.todos.push(newTask);
-    return { ...newTask };
+  async create(userId, task) {
+    const { rows } = await db.query(
+      `INSERT INTO todos (user_id, id, title, description, priority, category, due_date, completed, completed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $8 THEN now() END)
+       RETURNING ${taskColumns}`,
+      [userId, randomUUID(), task.title.trim(), (task.description || "").trim(),
+        normalizePriority(task.priority || "Medium"), task.category || "Personal",
+        normalizeDate(task.dueDate), Boolean(task.completed)]
+    );
+    return rows[0];
   }
 
-  /**
-   * Update an existing task
-   * @param {string|number} id
-   * @param {Object} updates
-   */
-  async update(id, updates) {
-    const index = this.todos.findIndex((t) => t.id.toString() === id.toString());
-    if (index === -1) return null;
-
-    const current = this.todos[index];
-    const updated = {
-      ...current,
-      ...(updates.title !== undefined && { title: updates.title.trim() }),
-      ...(updates.description !== undefined && { description: (updates.description || "").trim() }),
-      ...(updates.priority !== undefined && {
-        priority: updates.priority.charAt(0).toUpperCase() + updates.priority.slice(1).toLowerCase(),
-      }),
-      ...(updates.dueDate !== undefined && { dueDate: updates.dueDate || "" }),
-      ...(updates.completed !== undefined && { completed: Boolean(updates.completed) }),
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.todos[index] = updated;
-    return { ...updated };
+  async update(userId, id, updates) {
+    const { rows } = await db.query(
+      `UPDATE todos SET
+         title = coalesce($3, title),
+         description = coalesce($4, description),
+         priority = coalesce($5, priority),
+         category = coalesce($6, category),
+         due_date = CASE WHEN $7 THEN $8 ELSE due_date END,
+         completed_at = CASE WHEN $9::boolean IS NULL THEN completed_at
+                             WHEN NOT $9 THEN NULL
+                             ELSE coalesce(completed_at, now()) END,
+         completed = coalesce($9, completed),
+         updated_at = now()
+       WHERE user_id = $1 AND id = $2 RETURNING ${taskColumns}`,
+      [userId, id, updates.title?.trim(),
+        updates.description === undefined ? null : (updates.description || "").trim(),
+        updates.priority ? normalizePriority(updates.priority) : null,
+        updates.category, updates.dueDate !== undefined, normalizeDate(updates.dueDate),
+        updates.completed === undefined ? null : Boolean(updates.completed)]
+    );
+    return rows[0];
   }
 
-  /**
-   * Update only the completion status
-   * @param {string|number} id
-   * @param {boolean} completed
-   */
-  async updateStatus(id, completed) {
-    return this.update(id, { completed });
+  async updateStatus(userId, id, completed) {
+    const { rows } = await db.query(
+      `UPDATE todos SET
+         completed_at = CASE WHEN coalesce($3, NOT completed) THEN coalesce(completed_at, now()) END,
+         completed = coalesce($3, NOT completed),
+         updated_at = now()
+       WHERE user_id = $1 AND id = $2 RETURNING ${taskColumns}`,
+      [userId, id, completed]
+    );
+    return rows[0];
   }
 
-  /**
-   * Delete a task by ID
-   * @param {string|number} id
-   */
-  async delete(id) {
-    const index = this.todos.findIndex((t) => t.id.toString() === id.toString());
-    if (index === -1) return null;
-
-    const [deleted] = this.todos.splice(index, 1);
-    return deleted;
+  async delete(userId, id) {
+    const { rows } = await db.query(
+      `DELETE FROM todos WHERE user_id = $1 AND id = $2 RETURNING ${taskColumns}`, [userId, id]
+    );
+    return rows[0];
   }
 
-  /**
-   * Calculate summary statistics (total, pending, completed)
-   */
-  async getSummary() {
-    const total = this.todos.length;
-    const completed = this.todos.filter((t) => t.completed).length;
-    const pending = total - completed;
-    return { total, pending, completed };
+  async getSummary(userId) {
+    const { rows: [summary] } = await db.query(
+      `SELECT count(*)::int AS total,
+              count(*) FILTER (WHERE completed)::int AS completed,
+              count(*) FILTER (WHERE NOT completed)::int AS pending
+       FROM todos WHERE user_id = $1`, [userId]
+    );
+    return summary;
   }
 }
 
-// Export singleton instance
 module.exports = new TodoModel();

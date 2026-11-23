@@ -1,3 +1,4 @@
+const ALLOWED_CATEGORIES = ["Work", "Personal", "Study", "Other"];
 const ALLOWED_PRIORITIES = ["low", "medium", "high"];
 
 /**
@@ -8,11 +9,12 @@ function isValidDate(dateStr) {
   // Check regex format YYYY-MM-DD
   const regex = /^\d{4}-\d{2}-\d{2}$/;
   if (regex.test(dateStr)) {
-    const timestamp = Date.parse(dateStr + "T00:00:00");
-    return !isNaN(timestamp);
+    const date = new Date(dateStr + "T00:00:00Z");
+    return !isNaN(date) && date.toISOString().slice(0, 10) === dateStr && !dateStr.startsWith("0000");
   }
   // Also check standard ISO
-  return !isNaN(Date.parse(dateStr));
+  const date = new Date(dateStr);
+  return !isNaN(date) && date.getUTCFullYear() >= 1 && date.getUTCFullYear() <= 9999;
 }
 
 /**
@@ -55,6 +57,10 @@ function validateCreateTodo(req) {
     }
   }
 
+  if (body.category !== undefined && !ALLOWED_CATEGORIES.includes(body.category)) {
+    errors.push("Category must be Work, Personal, Study, or Other.");
+  }
+
   // Due Date validation (optional)
   if (body.dueDate !== undefined && body.dueDate !== null && body.dueDate !== "") {
     if (!isValidDate(body.dueDate)) {
@@ -83,11 +89,11 @@ function validateUpdateTodo(req) {
     return ["Request body must be a valid JSON object."];
   }
 
-  const allowedFields = ["title", "description", "priority", "dueDate", "completed"];
+  const allowedFields = ["title", "description", "priority", "dueDate", "completed", "category"];
   const providedFields = Object.keys(body).filter((key) => allowedFields.includes(key));
 
   if (providedFields.length === 0) {
-    return ["At least one valid field ('title', 'description', 'priority', 'dueDate', 'completed') must be provided for update."];
+    return ["At least one valid field ('title', 'description', 'priority', 'dueDate', 'completed', 'category') must be provided for update."];
   }
 
   // Title validation (if provided)
@@ -117,6 +123,10 @@ function validateUpdateTodo(req) {
     } else if (!ALLOWED_PRIORITIES.includes(body.priority.toLowerCase())) {
       errors.push("Field 'priority' must be one of: 'Low', 'Medium', 'High'.");
     }
+  }
+
+  if (body.category !== undefined && !ALLOWED_CATEGORIES.includes(body.category)) {
+    errors.push("Category must be Work, Personal, Study, or Other.");
   }
 
   // Due Date validation (if provided)
